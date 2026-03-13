@@ -3,6 +3,7 @@ import os
 import time
 from pathlib import Path
 
+import pandas as pd
 import soundfile as sf
 import torch
 import yaml
@@ -110,6 +111,28 @@ def main(args):
         output_path = os.path.join(args.output, filename)
         save_sr, converted_audio = converted_audio
         sf.write(output_path, converted_audio, 16000)
+    elif Path(args.source).suffix in [".jsonl"]:
+        df = pd.read_json(args.source, lines=True)
+        for idx, row in _tqdm(df.iterrows(), total=len(df)):
+            source_file = row.get(
+                "source",
+                row.get("audio_filepath", row.get("filepath", row.get("audio", None))),
+            )
+            converted_audio = convert_voice_v2(str(source_file), args.target, args)
+            if converted_audio is None:
+                print(f"Error: Failed to convert voice for row {idx}")
+                continue
+
+            # Save the converted audio
+            source_name = os.path.basename(source_file).split(".")[0]
+            target_name = os.path.basename(args.target).split(".")[0]
+
+            # Create a descriptive filename
+            filename = f"seed_vc_v2_{source_name}_{target_name}_{args.length_adjust}_{args.diffusion_steps}_{args.similarity_cfg_rate}.wav"
+
+            output_path = os.path.join(args.output, filename)
+            save_sr, converted_audio = converted_audio
+            sf.write(output_path, converted_audio, 16000)
     else:
         converted_audio = convert_voice_v2(args.source, args.target, args)
         if converted_audio is None:

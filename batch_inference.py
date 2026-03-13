@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from tqdm import tqdm as _tqdm
 
 os.environ["HF_HUB_CACHE"] = "./checkpoints/hf_cache"
@@ -516,6 +517,16 @@ if __name__ == "__main__":
             if source_file.suffix.lower() not in [".wav", ".mp3", ".flac"]:
                 print(f"Skipping unsupported file format: {source_file}")
                 continue
+            arg = copy.deepcopy(args)
+            arg.source = str(source_file)
+            main(arg)
+    elif Path(args.source).suffix in [".jsonl"]:
+        df = pd.read_json(args.source, lines=True)
+        for idx, row in _tqdm(df.iterrows(), total=len(df)):
+            source_file = row.get(
+                "source",
+                row.get("audio_filepath", row.get("filepath", row.get("audio", None))),
+            )
             arg = copy.deepcopy(args)
             arg.source = str(source_file)
             main(arg)
