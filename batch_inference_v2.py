@@ -59,8 +59,8 @@ def load_v2_models(args):
 
 
 def batch_convert_voice_v2(
-    source: str | np.ndarray,
-    target: str | np.ndarray,
+    source: str | np.ndarray | list[str] | list[np.ndarray],
+    target: str | np.ndarray | list[str] | list[np.ndarray],
     diffusion_steps: int = 30,
     length_adjust: float = 1.0,
     intelligebility_cfg_rate: float = 0.7,
@@ -73,37 +73,45 @@ def batch_convert_voice_v2(
     device: torch.device = torch.device("cuda"),
     dtype: torch.dtype = torch.float16,
     stream_output: bool = True,
-):
+) -> list[torch.Tensor]:
     global vc_wrapper_v2
     if vc_wrapper_v2 is None:
         vc_wrapper_v2 = load_v2_models(args)
 
-    if isinstance(source, str):
-        source_wave = librosa.load(source, sr=vc_wrapper_v2.sr)[0]
-    else:
-        source_wave = source
-    if isinstance(target, str):
-        target_wave = librosa.load(target, sr=vc_wrapper_v2.sr)[0]
-    else:
-        target_wave = target
+    sources = [source] if isinstance(source, str) else source
+    targets = [target] if isinstance(target, str) else target
+    source_waves = []
+    target_waves = []
+
+    for _source_wave, _target_wave in zip(sources, targets):
+        if isinstance(_source_wave, str):
+            source_waves.append(librosa.load(_source_wave, sr=vc_wrapper_v2.sr)[0])
+        else:
+            source_waves.append(_source_wave)
+        if isinstance(_target_wave, str):
+            target_waves.append(librosa.load(_target_wave, sr=vc_wrapper_v2.sr)[0])
+        else:
+            target_waves.append(_target_wave)
 
     # Limit target audio to 25 seconds
-    target_wave = target_wave[
-        : vc_wrapper_v2.sr * (vc_wrapper_v2.dit_max_context_len - 5)
+    target_waves = np.array(target_waves)[
+        :, : vc_wrapper_v2.sr * (vc_wrapper_v2.dit_max_context_len - 5)
     ]
 
-    source_wave_tensor = torch.tensor(source_wave).unsqueeze(0).float().to(device)
-    target_wave_tensor = torch.tensor(target_wave).unsqueeze(0).float().to(device)
+    source_wave_tensor = torch.tensor(source_waves).float().to(device)
+    target_wave_tensor = torch.tensor(target_waves).float().to(device)
 
     # Resample to 16kHz for feature extraction
-    source_wave_16k = librosa.resample(
-        source_wave, orig_sr=vc_wrapper_v2.sr, target_sr=16000
-    )
-    target_wave_16k = librosa.resample(
-        target_wave, orig_sr=vc_wrapper_v2.sr, target_sr=16000
-    )
-    source_wave_16k_tensor = torch.tensor(source_wave_16k).unsqueeze(0).to(device)
-    target_wave_16k_tensor = torch.tensor(target_wave_16k).unsqueeze(0).to(device)
+    source_wave_16k = [
+        librosa.resample(source_wave, orig_sr=vc_wrapper_v2.sr, target_sr=16000)
+        for source_wave in source_waves
+    ]
+    target_wave_16k = [
+        librosa.resample(target_wave, orig_sr=vc_wrapper_v2.sr, target_sr=16000)
+        for target_wave in target_waves
+    ]
+    source_wave_16k_tensor = torch.tensor(source_wave_16k).to(device)
+    target_wave_16k_tensor = torch.tensor(target_wave_16k).to(device)
 
     # Compute mel spectrograms
     source_mel = vc_wrapper_v2.mel_fn(source_wave_tensor)
@@ -135,9 +143,10 @@ def batch_convert_voice_v2(
         )
 
     # prepare for streaming
-    generated_wave_chunks = []
+    generated_wave_chunks = [[] for _ in range(len(source_waves))]
     processed_frames = 0
-    previous_chunk = None
+    previous_chunk = [None for _ in range(len(source_waves))]
+    full_audios = [None for _ in range(len(source_waves))]
     cond, _ = vc_wrapper_v2.cfm_length_regulator(
         source_content_indices, ylens=torch.LongTensor([source_mel_len]).to(device)
     )
@@ -179,23 +188,25 @@ def batch_convert_voice_v2(
         vc_mel = vc_mel[:, :, target_mel_len:original_len]
         vc_wave = vc_wrapper_v2.vocoder(vc_mel).squeeze()[None]
 
-        processed_frames, previous_chunk, should_break, mp3_bytes, full_audio = (
-            vc_wrapper_v2._stream_wave_chunks(
-                vc_wave,
+        for i in range(len(source_waves)):
+            (
                 processed_frames,
-                vc_mel,
+                previous_chunk[i],
+                should_break,
+                mp3_bytes,
+                full_audios[i],
+            ) = vc_wrapper_v2._stream_wave_chunks(
+                vc_wave[i],
+                processed_frames,
+                vc_mel[i],
                 overlap_wave_len,
-                generated_wave_chunks,
-                previous_chunk,
+                generated_wave_chunks[i],
+                previous_chunk[i],
                 is_last_chunk,
                 True,
             )
-        )
 
-        if mp3_bytes is not None:
-            yield mp3_bytes, full_audio
-        if should_break:
-            break
+    return full_audios  # type: ignore
 
 
 def convert_voice_v2(source_audio_path, target_audio_path, args):
@@ -205,7 +216,7 @@ def convert_voice_v2(source_audio_path, target_audio_path, args):
         vc_wrapper_v2 = load_v2_models(args)
 
     # Use the generator function but collect all outputs
-    generator = batch_convert_voice_v2(
+    full_audios = batch_convert_voice_v2(
         source=source_audio_path,
         target=target_audio_path,
         diffusion_steps=args.diffusion_steps,
@@ -222,10 +233,7 @@ def convert_voice_v2(source_audio_path, target_audio_path, args):
         stream_output=True,
     )
 
-    # Collect all outputs from the generator
-    for output in generator:
-        _, full_audio = output
-    return full_audio
+    return full_audios
 
 
 def main(args):
@@ -237,26 +245,14 @@ def main(args):
 
     start_time = time.time()
     target_wave = librosa.load(args.target, sr=vc_wrapper_v2.sr)[0]
+    source_files: list[str] = list()
     if Path(args.source).is_dir():
         for source_file in _tqdm(list(Path(args.source).glob("*.*"))):
             if source_file.suffix.lower() not in [".wav", ".mp3", ".flac"]:
                 print(f"Skipping unsupported file format: {source_file}")
                 continue
-            converted_audio = convert_voice_v2(str(source_file), target_wave, args)
-            if converted_audio is None:
-                print("Error: Failed to convert voice")
-                return
+            source_files.append(source_file)
 
-        # Save the converted audio
-        source_name = os.path.basename(args.source).split(".")[0]
-        target_name = os.path.basename(args.target).split(".")[0]
-
-        # Create a descriptive filename
-        filename = f"seed_vc_v2_{source_name}_{target_name}_{args.length_adjust}_{args.diffusion_steps}_{args.similarity_cfg_rate}.wav"
-
-        output_path = os.path.join(args.output, filename)
-        save_sr, converted_audio = converted_audio
-        sf.write(output_path, converted_audio, 16000)
     elif Path(args.source).suffix in [".jsonl"]:
         df = pd.read_json(args.source, lines=True)
         for idx, row in _tqdm(df.iterrows(), total=len(df)):
@@ -267,41 +263,61 @@ def main(args):
             if source_file is None:
                 print(f"Error: Failed to find source file for row {idx}")
                 continue
+            source_files.append(source_file)
 
-            # Save the converted audio
-            source_name = os.path.basename(source_file).split(".")[0]
-            target_name = os.path.basename(args.target).split(".")[0]
-
-            # Create a descriptive filename
-            filename = f"seed_vc_v2_{source_name}_{target_name}_{args.length_adjust}_{args.diffusion_steps}_{args.similarity_cfg_rate}.wav"
-
-            if Path(args.output, filename).exists():
-                continue
-
-            converted_audio = convert_voice_v2(str(source_file), args.target, args)
-            if converted_audio is None:
-                print(f"Error: Failed to convert voice for row {idx}")
-                continue
-
-            output_path = os.path.join(args.output, filename)
-            save_sr, converted_audio = converted_audio
-            sf.write(output_path, converted_audio, 16000)
     else:
-        converted_audio = convert_voice_v2(args.source, args.target, args)
+        source_files.append(args.source)
+
+    source_files = [
+        source_file
+        for source_file in source_files
+        if not Path(
+            args.output,
+            (
+                "seed_vc_v2"
+                + f"_{Path(source_file).stem}"
+                + f"_{Path(args.target).stem}"
+                + f"_{args.length_adjust}"
+                + f"_{args.diffusion_steps}"
+                + f"_{args.similarity_cfg_rate}.wav"
+            ),
+        ).exists()
+    ]
+
+    for batch in np.array_split(source_files, 2):
+        converted_audio = batch_convert_voice_v2(
+            source=batch,
+            target=target_wave,
+            diffusion_steps=args.diffusion_steps,
+            length_adjust=args.length_adjust,
+            intelligebility_cfg_rate=args.intelligibility_cfg_rate,
+            similarity_cfg_rate=args.similarity_cfg_rate,
+            top_p=args.top_p,
+            temperature=args.temperature,
+            repetition_penalty=args.repetition_penalty,
+            convert_style=args.convert_style,
+            anonymization_only=args.anonymization_only,
+            device=device,
+            dtype=dtype,
+            stream_output=True,
+        )
         if converted_audio is None:
-            print("Error: Failed to convert voice")
-            return
+            raise Exception(f"Error: Failed to convert voice for {batch}")
 
-        # Save the converted audio
-        source_name = os.path.basename(args.source).split(".")[0]
-        target_name = os.path.basename(args.target).split(".")[0]
-
-        # Create a descriptive filename
-        filename = f"seed_vc_v2_{source_name}_{target_name}_{args.length_adjust}_{args.diffusion_steps}_{args.similarity_cfg_rate}.wav"
-
-        output_path = os.path.join(args.output, filename)
-        save_sr, converted_audio = converted_audio
-        sf.write(output_path, converted_audio, 16000)
+        for idx, source in enumerate(batch):
+            # Create a descriptive filename
+            output_path = Path(
+                args.output,
+                (
+                    "seed_vc_v2"
+                    + f"_{Path(source).stem}"
+                    + f"_{Path(args.target).stem}"
+                    + f"_{args.length_adjust}"
+                    + f"_{args.diffusion_steps}"
+                    + f"_{args.similarity_cfg_rate}.wav"
+                ),
+            )
+            sf.write(output_path, converted_audio[idx], 16000)
 
     end_time = time.time()
 
@@ -340,6 +356,12 @@ if __name__ == "__main__":
         type=bool,
         default=False,
         help="Whether to compile the model for faster inference",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help="Batch size for inference",
     )
 
     # V2 specific arguments
