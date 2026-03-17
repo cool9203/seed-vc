@@ -59,8 +59,8 @@ def load_v2_models(args):
 
 
 def batch_convert_voice_v2(
-    source: str | np.ndarray | list[str] | list[np.ndarray],
-    target: str | np.ndarray | list[str] | list[np.ndarray],
+    sources: list[str] | list[np.ndarray],
+    targets: list[str] | list[np.ndarray],
     diffusion_steps: int = 30,
     length_adjust: float = 1.0,
     intelligebility_cfg_rate: float = 0.7,
@@ -77,18 +77,17 @@ def batch_convert_voice_v2(
     global vc_wrapper_v2
     if vc_wrapper_v2 is None:
         vc_wrapper_v2 = load_v2_models(args)
+    source_waves = list()
+    target_waves = list()
 
-    sources = [source] if isinstance(source, str) else source
-    targets = [target] if isinstance(target, str) else target
-    source_waves = []
-    target_waves = []
+    assert len(sources) == len(targets)
 
     for _source_wave, _target_wave in zip(sources, targets):
-        if isinstance(_source_wave, str):
+        if isinstance(_source_wave, (str, Path)):
             source_waves.append(librosa.load(_source_wave, sr=vc_wrapper_v2.sr)[0])
         else:
             source_waves.append(_source_wave)
-        if isinstance(_target_wave, str):
+        if isinstance(_target_wave, (str, Path)):
             target_waves.append(librosa.load(_target_wave, sr=vc_wrapper_v2.sr)[0])
         else:
             target_waves.append(_target_wave)
@@ -98,7 +97,14 @@ def batch_convert_voice_v2(
         :, : vc_wrapper_v2.sr * (vc_wrapper_v2.dit_max_context_len - 5)
     ]
 
-    source_wave_tensor = torch.tensor(source_waves).float().to(device)
+    source_waves_pad = [torch.tensor(source_wave) for source_wave in source_waves]
+    source_wave_tensor = (
+        torch.nn.utils.rnn.pad_sequence(
+            source_waves_pad, batch_first=True, padding_value=0.0
+        )
+        .float()
+        .to(device)
+    )
     target_wave_tensor = torch.tensor(target_waves).float().to(device)
 
     # Resample to 16kHz for feature extraction
@@ -110,8 +116,16 @@ def batch_convert_voice_v2(
         librosa.resample(target_wave, orig_sr=vc_wrapper_v2.sr, target_sr=16000)
         for target_wave in target_waves
     ]
-    source_wave_16k_tensor = torch.tensor(source_wave_16k).to(device)
-    target_wave_16k_tensor = torch.tensor(target_wave_16k).to(device)
+
+    source_wave_16k_pad = [torch.tensor(source_wave) for source_wave in source_wave_16k]
+    source_wave_16k_tensor = (
+        torch.nn.utils.rnn.pad_sequence(
+            source_wave_16k_pad, batch_first=True, padding_value=0.0
+        )
+        .float()
+        .to(device)
+    )
+    target_wave_16k_tensor = torch.tensor(np.array(target_wave_16k)).to(device)
 
     # Compute mel spectrograms
     source_mel = vc_wrapper_v2.mel_fn(source_wave_tensor)
@@ -127,19 +141,43 @@ def batch_convert_voice_v2(
 
     with torch.autocast(device_type=device.type, dtype=dtype):
         # Compute content features
-        source_content_indices = vc_wrapper_v2._process_content_features(
-            source_wave_16k_tensor, is_narrow=False
+        source_content_indices = torch.tensor(
+            np.array(
+                [
+                    vc_wrapper_v2._process_content_features(
+                        _source_wave_16k_tensor.unsqueeze(0), is_narrow=False
+                    ).numpy()[0]
+                    for _source_wave_16k_tensor in source_wave_16k_tensor
+                ]
+            )
         )
-        target_content_indices = vc_wrapper_v2._process_content_features(
-            target_wave_16k_tensor, is_narrow=False
+        target_content_indices = torch.tensor(
+            np.array(
+                [
+                    vc_wrapper_v2._process_content_features(
+                        _target_wave_16k_tensor.unsqueeze(0), is_narrow=False
+                    ).numpy()[0]
+                    for _target_wave_16k_tensor in target_wave_16k_tensor
+                ]
+            )
         )
         # Compute style features
-        target_style = vc_wrapper_v2.compute_style(target_wave_16k_tensor)
+        target_style = torch.tensor(
+            np.array(
+                [
+                    vc_wrapper_v2.compute_style(
+                        _target_wave_16k_tensor.unsqueeze(0)
+                    ).numpy()[0]
+                    for _target_wave_16k_tensor in target_wave_16k_tensor
+                ]
+            )
+        )
         (
             prompt_condition,
             _,
         ) = vc_wrapper_v2.cfm_length_regulator(
-            target_content_indices, ylens=torch.LongTensor([target_mel_len]).to(device)
+            target_content_indices,
+            ylens=torch.LongTensor([target_mel_len] * len(source_waves)).to(device),
         )
 
     # prepare for streaming
@@ -148,7 +186,8 @@ def batch_convert_voice_v2(
     previous_chunk = [None for _ in range(len(source_waves))]
     full_audios = [None for _ in range(len(source_waves))]
     cond, _ = vc_wrapper_v2.cfm_length_regulator(
-        source_content_indices, ylens=torch.LongTensor([source_mel_len]).to(device)
+        source_content_indices,
+        ylens=torch.LongTensor([source_mel_len] * len(source_waves)).to(device),
     )
 
     # Process in chunks for streaming
@@ -178,7 +217,7 @@ def batch_convert_voice_v2(
             # Voice Conversion
             vc_mel = vc_wrapper_v2.cfm.inference(
                 cat_condition,
-                torch.LongTensor([original_len]).to(device),
+                torch.LongTensor([original_len] * len(source_waves)).to(device),
                 target_mel,
                 target_style,
                 diffusion_steps,
@@ -206,34 +245,10 @@ def batch_convert_voice_v2(
                 True,
             )
 
+    print(full_audios)
+    print(full_audios.size() if hasattr(full_audios, "size") else full_audios.shape)
+
     return full_audios  # type: ignore
-
-
-def convert_voice_v2(source_audio_path, target_audio_path, args):
-    """Convert voice using V2 model"""
-    global vc_wrapper_v2
-    if vc_wrapper_v2 is None:
-        vc_wrapper_v2 = load_v2_models(args)
-
-    # Use the generator function but collect all outputs
-    full_audios = batch_convert_voice_v2(
-        source=source_audio_path,
-        target=target_audio_path,
-        diffusion_steps=args.diffusion_steps,
-        length_adjust=args.length_adjust,
-        intelligebility_cfg_rate=args.intelligibility_cfg_rate,
-        similarity_cfg_rate=args.similarity_cfg_rate,
-        top_p=args.top_p,
-        temperature=args.temperature,
-        repetition_penalty=args.repetition_penalty,
-        convert_style=args.convert_style,
-        anonymization_only=args.anonymization_only,
-        device=device,
-        dtype=dtype,
-        stream_output=True,
-    )
-
-    return full_audios
 
 
 def main(args):
@@ -247,7 +262,9 @@ def main(args):
     target_wave = librosa.load(args.target, sr=vc_wrapper_v2.sr)[0]
     source_files: list[str] = list()
     if Path(args.source).is_dir():
-        for source_file in _tqdm(list(Path(args.source).glob("*.*"))):
+        for source_file in _tqdm(
+            list(Path(args.source).glob("*.*")), desc="Loading source files"
+        ):
             if source_file.suffix.lower() not in [".wav", ".mp3", ".flac"]:
                 print(f"Skipping unsupported file format: {source_file}")
                 continue
@@ -255,7 +272,9 @@ def main(args):
 
     elif Path(args.source).suffix in [".jsonl"]:
         df = pd.read_json(args.source, lines=True)
-        for idx, row in _tqdm(df.iterrows(), total=len(df)):
+        for idx, row in _tqdm(
+            df.iterrows(), total=len(df), desc="Loading source files"
+        ):
             source_file = row.get(
                 "source",
                 row.get("audio_filepath", row.get("filepath", row.get("audio", None))),
@@ -270,7 +289,7 @@ def main(args):
 
     source_files = [
         source_file
-        for source_file in source_files
+        for source_file in _tqdm(source_files, desc="Filtering source files")
         if not Path(
             args.output,
             (
@@ -284,10 +303,13 @@ def main(args):
         ).exists()
     ]
 
-    for batch in np.array_split(source_files, 2):
+    for batch in _tqdm(
+        np.array_split(source_files, len(source_files) // args.batch_size + 1),
+        desc="Converting voice",
+    ):
         converted_audio = batch_convert_voice_v2(
-            source=batch,
-            target=target_wave,
+            sources=batch.tolist(),
+            targets=[target_wave] * len(batch),
             diffusion_steps=args.diffusion_steps,
             length_adjust=args.length_adjust,
             intelligebility_cfg_rate=args.intelligibility_cfg_rate,
