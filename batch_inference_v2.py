@@ -21,7 +21,7 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
 
-dtype = torch.float32
+dtype = torch.float32 if device.type == "cpu" else torch.float16
 
 # Global variables to store model instances
 vc_wrapper_v2 = None
@@ -150,32 +150,36 @@ def batch_convert_voice_v2(
                 [
                     vc_wrapper_v2._process_content_features(
                         _source_wave_16k_tensor.unsqueeze(0), is_narrow=False
-                    ).numpy()[0]
+                    )
+                    .cpu()
+                    .numpy()[0]
                     for _source_wave_16k_tensor in source_wave_16k_tensor
                 ]
             )
-        )
+        ).to(device)
         target_content_indices = torch.tensor(
             np.array(
                 [
                     vc_wrapper_v2._process_content_features(
                         _target_wave_16k_tensor.unsqueeze(0), is_narrow=False
-                    ).numpy()[0]
+                    )
+                    .cpu()
+                    .numpy()[0]
                     for _target_wave_16k_tensor in target_wave_16k_tensor
                 ]
             )
-        )
+        ).to(device)
         # Compute style features
         target_style = torch.tensor(
             np.array(
                 [
-                    vc_wrapper_v2.compute_style(
-                        _target_wave_16k_tensor.unsqueeze(0)
-                    ).numpy()[0]
+                    vc_wrapper_v2.compute_style(_target_wave_16k_tensor.unsqueeze(0))
+                    .cpu()
+                    .numpy()[0]
                     for _target_wave_16k_tensor in target_wave_16k_tensor
                 ]
             )
-        )
+        ).to(device)
         (
             prompt_condition,
             _,
