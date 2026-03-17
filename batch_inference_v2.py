@@ -298,6 +298,13 @@ def main(args):
     else:
         source_files.append(args.source)
 
+    if args.start_index is not None and args.end_index is not None:
+        source_files = source_files[args.start_index : args.end_index]
+    elif args.start_index is not None:
+        source_files = source_files[args.start_index :]
+    elif args.end_index is not None:
+        source_files = source_files[: args.end_index]
+
     source_files = [
         source_file
         for source_file in _tqdm(source_files, desc="Filtering source files")
@@ -396,6 +403,18 @@ if __name__ == "__main__":
         type=int,
         default=1,
         help="Batch size for inference",
+    )
+    parser.add_argument(
+        "--start-index",
+        type=int,
+        default=None,
+        help="Starting index for batch processing",
+    )
+    parser.add_argument(
+        "--end-index",
+        type=int,
+        default=None,
+        help="Ending index for batch processing",
     )
 
     # V2 specific arguments
