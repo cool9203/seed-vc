@@ -21,7 +21,7 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
 
-dtype = torch.float16
+dtype = torch.float32
 
 # Global variables to store model instances
 vc_wrapper_v2 = None
@@ -58,6 +58,8 @@ def load_v2_models(args):
     return vc_wrapper
 
 
+@torch.no_grad()
+@torch.inference_mode()
 def batch_convert_voice_v2(
     sources: list[str] | list[np.ndarray],
     targets: list[str] | list[np.ndarray],
@@ -91,6 +93,8 @@ def batch_convert_voice_v2(
             target_waves.append(librosa.load(_target_wave, sr=vc_wrapper_v2.sr)[0])
         else:
             target_waves.append(_target_wave)
+
+    source_lengths = [len(sw) for sw in source_waves]
 
     # Limit target audio to 25 seconds
     target_waves = np.array(target_waves)[
@@ -132,6 +136,15 @@ def batch_convert_voice_v2(
     target_mel = vc_wrapper_v2.mel_fn(target_wave_tensor)
     source_mel_len = source_mel.size(2)
     target_mel_len = target_mel.size(2)
+
+    print(f"source_wave_tensor: {source_wave_tensor.size()}")
+    print(f"target_wave_tensor: {target_wave_tensor.size()}")
+    print(f"source_wave_16k_tensor: {source_wave_16k_tensor.size()}")
+    print(f"target_wave_16k_tensor: {target_wave_16k_tensor.size()}")
+    print(f"source_mel: {source_mel.size()}")
+    print(f"target_mel: {target_mel.size()}")
+    print(f"source_mel_len: {source_mel_len}")
+    print(f"target_mel_len: {target_mel_len}")
 
     # Set up chunk processing parameters
     max_context_window = (
@@ -180,6 +193,11 @@ def batch_convert_voice_v2(
             ylens=torch.LongTensor([target_mel_len] * len(source_waves)).to(device),
         )
 
+    print(f"source_content_indices: {source_content_indices.size()}")
+    print(f"target_content_indices: {target_content_indices.size()}")
+    print(f"target_style: {target_style.size()}")
+    print(f"prompt_condition: {prompt_condition.size()}")
+
     # prepare for streaming
     generated_wave_chunks = [[] for _ in range(len(source_waves))]
     processed_frames = 0
@@ -192,6 +210,8 @@ def batch_convert_voice_v2(
 
     # Process in chunks for streaming
     max_source_window = max_context_window - target_mel.size(2)
+    print(f"max_source_window: {max_source_window}")
+    print(f"cond.size(1): {cond.size(1)}")
 
     # Generate chunk by chunk and stream the output
     while processed_frames < cond.size(1):
@@ -211,6 +231,9 @@ def batch_convert_voice_v2(
                 ),
                 value=0,
             )
+        print(f"chunk_cond: {chunk_cond.size()}")
+        print(f"cat_condition: {cat_condition.size()}")
+        print(f"original_len: {original_len}")
         with torch.autocast(
             device_type=device.type, dtype=torch.float32
         ):  # force CFM to use float32
@@ -225,11 +248,14 @@ def batch_convert_voice_v2(
                 random_voice=anonymization_only,
             )
         vc_mel = vc_mel[:, :, target_mel_len:original_len]
-        vc_wave = vc_wrapper_v2.vocoder(vc_mel).squeeze()[None]
+        vc_wave = vc_wrapper_v2.vocoder(vc_mel)
+
+        print(f"vc_mel: {vc_mel.size()}")
+        print(f"vc_wave: {vc_wave.size()}")
 
         for i in range(len(source_waves)):
             (
-                processed_frames,
+                new_processed_frames,
                 previous_chunk[i],
                 should_break,
                 mp3_bytes,
@@ -244,11 +270,13 @@ def batch_convert_voice_v2(
                 is_last_chunk,
                 True,
             )
+        processed_frames = new_processed_frames
+        if should_break:
+            break
 
-    print(full_audios)
-    print(full_audios.size() if hasattr(full_audios, "size") else full_audios.shape)
-
-    return full_audios  # type: ignore
+    return [
+        (sr, wave[: int(source_lengths[i])]) for i, (sr, wave) in enumerate(full_audios)
+    ]  # type: ignore
 
 
 def main(args):
@@ -339,7 +367,8 @@ def main(args):
                     + f"_{args.similarity_cfg_rate}.wav"
                 ),
             )
-            sf.write(output_path, converted_audio[idx], 16000)
+            (sr, wav_data) = converted_audio[idx]
+            sf.write(output_path, wav_data, sr)
 
     end_time = time.time()
 
