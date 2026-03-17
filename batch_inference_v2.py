@@ -137,15 +137,6 @@ def batch_convert_voice_v2(
     source_mel_len = source_mel.size(2)
     target_mel_len = target_mel.size(2)
 
-    print(f"source_wave_tensor: {source_wave_tensor.size()}")
-    print(f"target_wave_tensor: {target_wave_tensor.size()}")
-    print(f"source_wave_16k_tensor: {source_wave_16k_tensor.size()}")
-    print(f"target_wave_16k_tensor: {target_wave_16k_tensor.size()}")
-    print(f"source_mel: {source_mel.size()}")
-    print(f"target_mel: {target_mel.size()}")
-    print(f"source_mel_len: {source_mel_len}")
-    print(f"target_mel_len: {target_mel_len}")
-
     # Set up chunk processing parameters
     max_context_window = (
         vc_wrapper_v2.sr // vc_wrapper_v2.hop_size * vc_wrapper_v2.dit_max_context_len
@@ -193,11 +184,6 @@ def batch_convert_voice_v2(
             ylens=torch.LongTensor([target_mel_len] * len(source_waves)).to(device),
         )
 
-    print(f"source_content_indices: {source_content_indices.size()}")
-    print(f"target_content_indices: {target_content_indices.size()}")
-    print(f"target_style: {target_style.size()}")
-    print(f"prompt_condition: {prompt_condition.size()}")
-
     # prepare for streaming
     generated_wave_chunks = [[] for _ in range(len(source_waves))]
     processed_frames = 0
@@ -210,8 +196,6 @@ def batch_convert_voice_v2(
 
     # Process in chunks for streaming
     max_source_window = max_context_window - target_mel.size(2)
-    print(f"max_source_window: {max_source_window}")
-    print(f"cond.size(1): {cond.size(1)}")
 
     # Generate chunk by chunk and stream the output
     while processed_frames < cond.size(1):
@@ -231,9 +215,6 @@ def batch_convert_voice_v2(
                 ),
                 value=0,
             )
-        print(f"chunk_cond: {chunk_cond.size()}")
-        print(f"cat_condition: {cat_condition.size()}")
-        print(f"original_len: {original_len}")
         with torch.autocast(
             device_type=device.type, dtype=torch.float32
         ):  # force CFM to use float32
@@ -250,9 +231,6 @@ def batch_convert_voice_v2(
             )
         vc_mel = vc_mel[:, :, target_mel_len:original_len]
         vc_wave = vc_wrapper_v2.vocoder(vc_mel)
-
-        print(f"vc_mel: {vc_mel.size()}")
-        print(f"vc_wave: {vc_wave.size()}")
 
         for i in range(len(source_waves)):
             (
