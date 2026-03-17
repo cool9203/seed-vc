@@ -99,7 +99,7 @@ class CFM(torch.nn.Module):
                     torch.zeros_like(style).repeat(2, 1),
                     torch.cat([mu, torch.zeros_like(mu)], dim=0),
                 )
-                cond_txt, uncond = cfg_dphi_dt[0:1], cfg_dphi_dt[1:2]
+                cond_txt, uncond = cfg_dphi_dt[0:B], cfg_dphi_dt[B : 2 * B]
                 dphi_dt = (1.0 + inference_cfg_rate[0]) * cond_txt - inference_cfg_rate[
                     0
                 ] * uncond
@@ -115,7 +115,7 @@ class CFM(torch.nn.Module):
                     torch.cat([style, torch.zeros_like(style)], dim=0),
                     torch.cat([mu, mu], dim=0),
                 )
-                cond_txt_spk, cond_txt = cfg_dphi_dt[0:1], cfg_dphi_dt[1:2]
+                cond_txt_spk, cond_txt = cfg_dphi_dt[0:B], cfg_dphi_dt[B : 2 * B]
                 dphi_dt = (
                     1.0 + inference_cfg_rate[1]
                 ) * cond_txt_spk - inference_cfg_rate[1] * cond_txt
@@ -128,7 +128,7 @@ class CFM(torch.nn.Module):
                     torch.cat([style, torch.zeros_like(style)], dim=0),
                     torch.cat([mu, torch.zeros_like(mu)], dim=0),
                 )
-                cond_txt_spk, uncond = cfg_dphi_dt[0:1], cfg_dphi_dt[1:2]
+                cond_txt_spk, uncond = cfg_dphi_dt[0:B], cfg_dphi_dt[B : 2 * B]
                 dphi_dt = (
                     1.0 + inference_cfg_rate[0]
                 ) * cond_txt_spk - inference_cfg_rate[0] * uncond
@@ -152,9 +152,9 @@ class CFM(torch.nn.Module):
                     torch.cat([mu, mu, torch.zeros_like(mu)], dim=0),
                 )
                 cond_txt_spk, cond_txt, uncond = (
-                    cfg_dphi_dt[0:1],
-                    cfg_dphi_dt[1:2],
-                    cfg_dphi_dt[2:3],
+                    cfg_dphi_dt[0:B],
+                    cfg_dphi_dt[B : 2 * B],
+                    cfg_dphi_dt[2 * B : 3 * B],
                 )
                 dphi_dt = (
                     (1.0 + inference_cfg_rate[0] + inference_cfg_rate[1]) * cond_txt_spk
