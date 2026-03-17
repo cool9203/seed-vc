@@ -24,6 +24,7 @@ class CFM(torch.nn.Module):
         temperature=1.0,
         inference_cfg_rate=[0.5, 0.5],
         random_voice=False,
+        disable_tqdm=False,
     ):
         """Forward diffusion
 
@@ -49,7 +50,15 @@ class CFM(torch.nn.Module):
         t_span = torch.linspace(0, 1, n_timesteps + 1, device=mu.device)
         t_span = t_span + (-1) * (torch.cos(torch.pi / 2 * t_span) - 1 + t_span)
         return self.solve_euler(
-            z, x_lens, prompt, mu, style, t_span, inference_cfg_rate, random_voice
+            z,
+            x_lens,
+            prompt,
+            mu,
+            style,
+            t_span,
+            inference_cfg_rate,
+            random_voice,
+            disable_tqdm,
         )
 
     def solve_euler(
@@ -62,6 +71,7 @@ class CFM(torch.nn.Module):
         t_span,
         inference_cfg_rate=[0.5, 0.5],
         random_voice=False,
+        disable_tqdm=False,
     ):
         """
         Fixed euler solver for ODEs.
@@ -89,7 +99,7 @@ class CFM(torch.nn.Module):
         prompt_x = torch.zeros_like(x)
         prompt_x[..., :prompt_len] = prompt[..., :prompt_len]
         x[..., :prompt_len] = 0
-        for step in tqdm(range(1, len(t_span))):
+        for step in tqdm(range(1, len(t_span)), disable=disable_tqdm):
             if random_voice:
                 cfg_dphi_dt = self.estimator(
                     torch.cat([x, x], dim=0),
@@ -211,5 +221,4 @@ class CFM(torch.nn.Module):
             )
         loss /= b
 
-        return loss
         return loss

@@ -246,6 +246,7 @@ def batch_convert_voice_v2(
                 diffusion_steps,
                 inference_cfg_rate=[intelligebility_cfg_rate, similarity_cfg_rate],
                 random_voice=anonymization_only,
+                disable_tqdm=True,
             )
         vc_mel = vc_mel[:, :, target_mel_len:original_len]
         vc_wave = vc_wrapper_v2.vocoder(vc_mel)
