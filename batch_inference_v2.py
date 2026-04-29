@@ -346,17 +346,7 @@ def main(args):
 
         for idx, source in enumerate(batch):
             # Create a descriptive filename
-            output_path = Path(
-                args.output,
-                (
-                    "seed_vc_v2"
-                    + f"_{Path(source).stem}"
-                    + f"_{Path(args.target).stem}"
-                    + f"_{args.length_adjust}"
-                    + f"_{args.diffusion_steps}"
-                    + f"_{args.similarity_cfg_rate}.wav"
-                ),
-            )
+            output_path = Path(args.output, f"{Path(source).stem}.wav")
             (sr, wav_data) = converted_audio[idx]
             sf.write(output_path, wav_data, sr)
 
