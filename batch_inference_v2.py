@@ -276,7 +276,10 @@ def main(args):
         for source_file in _tqdm(
             list(Path(args.source).glob("*.*")), desc="Loading source files"
         ):
-            if source_file.suffix.lower() not in [".wav", ".mp3", ".flac"]:
+            if (
+                source_file.suffix.lower() not in [".wav", ".mp3", ".flac"]
+                or librosa.get_duration(filename=source_file) == 0
+            ):
                 print(f"Skipping unsupported file format: {source_file}")
                 continue
             source_files.append(source_file)
@@ -290,7 +293,11 @@ def main(args):
                 "source",
                 row.get("audio_filepath", row.get("filepath", row.get("audio", None))),
             )
-            if source_file is None:
+            if (
+                source_file is None
+                or Path(source_file).suffix.lower() not in [".wav", ".mp3", ".flac"]
+                or librosa.get_duration(filename=source_file) == 0
+            ):
                 print(f"Error: Failed to find source file for row {idx}")
                 continue
             source_files.append(source_file)
