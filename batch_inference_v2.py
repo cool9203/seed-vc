@@ -310,14 +310,7 @@ def main(args):
         for source_file in _tqdm(source_files, desc="Filtering source files")
         if not Path(
             args.output,
-            (
-                "seed_vc_v2"
-                + f"_{Path(source_file).stem}"
-                + f"_{Path(args.target).stem}"
-                + f"_{args.length_adjust}"
-                + f"_{args.diffusion_steps}"
-                + f"_{args.similarity_cfg_rate}.wav"
-            ),
+            f"{Path(source_file).stem}.wav",
         ).exists()
     ]
 
