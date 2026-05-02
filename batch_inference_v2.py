@@ -325,24 +325,27 @@ def main(args):
         np.array_split(source_files, len(source_files) // args.batch_size + 1),
         desc="Converting voice",
     ):
-        converted_audio = batch_convert_voice_v2(
-            sources=batch.tolist(),
-            targets=[target_wave] * len(batch),
-            diffusion_steps=args.diffusion_steps,
-            length_adjust=args.length_adjust,
-            intelligebility_cfg_rate=args.intelligibility_cfg_rate,
-            similarity_cfg_rate=args.similarity_cfg_rate,
-            top_p=args.top_p,
-            temperature=args.temperature,
-            repetition_penalty=args.repetition_penalty,
-            convert_style=args.convert_style,
-            anonymization_only=args.anonymization_only,
-            device=device,
-            dtype=dtype,
-            stream_output=True,
-        )
-        if converted_audio is None:
-            raise Exception(f"Error: Failed to convert voice for {batch}")
+        try:
+            converted_audio = batch_convert_voice_v2(
+                sources=batch.tolist(),
+                targets=[target_wave] * len(batch),
+                diffusion_steps=args.diffusion_steps,
+                length_adjust=args.length_adjust,
+                intelligebility_cfg_rate=args.intelligibility_cfg_rate,
+                similarity_cfg_rate=args.similarity_cfg_rate,
+                top_p=args.top_p,
+                temperature=args.temperature,
+                repetition_penalty=args.repetition_penalty,
+                convert_style=args.convert_style,
+                anonymization_only=args.anonymization_only,
+                device=device,
+                dtype=dtype,
+                stream_output=True,
+            )
+        except Exception as e:
+            print(f"Error: Failed to convert voice for {batch}")
+            print(e)
+            continue
 
         for idx, source in enumerate(batch):
             # Create a descriptive filename
